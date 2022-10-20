@@ -110,7 +110,7 @@ struct type_descriptor {
           cast<T>(src)->~T();
         },
         +[](storage_t const & src, Args... args) -> R { ///!!!!!!!!!!!!!! Args&&... args
-          cast<T>(src)->operator()(std::forward<Args>(args)...);
+          return cast<T>(src)->operator()(std::forward<Args>(args)...);
         }};
 
     return &result;
