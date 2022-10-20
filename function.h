@@ -25,7 +25,7 @@ T const* small_cast(storage_t const& storage)
 }
 
 template<typename T>
-T*& big_cast(storage_t &storage)
+T* big_cast(storage_t &storage)
 {
   return *reinterpret_cast<T**>(&storage);
 }
@@ -87,27 +87,67 @@ struct type_descriptor {
 
     constexpr static type_descriptor<R, Args...> result = {
         +[](storage_t const& src, storage_t& dst) {
-          if constexpr (fits_small<T>) {
-            dst = src;  ///!!!!!!!!!!!!!!!!!!!!!!
-          } else {
-            big_cast<T>(dst) = new T(*big_cast<T>(src));
-          }
+//          if constexpr (fits_small<T>) {
+//            dst = src;  ///!!!!!!!!!!!!!!!!!!!!!!
+//          } else {
+//            //*reinterpret_cast<T**>(&dst) = new T(*big_cast<T>(src));
+//            new (&dst) T(*big_cast<T>(src));
+//          }
+
+            if constexpr (fits_small<T>)
+            {
+              new (&dst) T(*small_cast<T>(src));
+            } else {
+                auto ptr = new T(*big_cast<T>(src));
+                new (&dst) T*(ptr);
+
+                //new (&dst) T*(big_cast<T>(src));
+            }
+
+            //new (&dst) T(*cast<T>(src));
         },
         +[](storage_t& src, storage_t& dst) {
-          if constexpr (fits_small<T>) {
-            dst = src;//new T(std::move(static_cast<T>(src))); ///!!!!!!!!!!!!!!!!!!!!!!
+          if constexpr (fits_small<T>)
+          {
+            new (&dst) T(std::move(*small_cast<T>(src)));
           } else {
-            try {
-              big_cast<T>(dst) = new T(std::move(*big_cast<T>(src))); ///!!!!!!!!!!!!!!!!!!!!!!
-            }
-            catch(...)
-            {
-              std::swap(src, dst);
-            }
+
+            new (&dst) T*(big_cast<T>(src));
+//            try {
+//              auto ptr = new T(std::move(*big_cast<T>(src)));
+//              new (&dst) T*(ptr);
+//            }
+//            catch(...)
+//            {
+//              std::swap(src, dst);
+//            }
           }
+
+          //new (&dst) T(std::move(*cast<T>(src)));
+//          if constexpr (fits_small<T>) {
+//            dst = src;//new T(std::move(static_cast<T>(src))); ///!!!!!!!!!!!!!!!!!!!!!!
+//          } else {
+//            try {
+//              new (&dst) T(std::move(*big_cast<T>(src)));
+//
+//              //*reinterpret_cast<T**>(&dst) = new T(std::move(*big_cast<T>(src))); ///!!!!!!!!!!!!!!!!!!!!!!
+//            }
+//            catch(...)
+//            {
+//              std::swap(src, dst);
+//            }
+//          }
         },
         +[](storage_t& src) {
-          cast<T>(src)->~T();
+            //cast<T>(src)->~T();
+
+          if constexpr (fits_small<T>) {
+            small_cast<T>(src)->~T();
+          }
+          else
+          {
+            delete big_cast<T>(src);
+          }
         },
         +[](storage_t const & src, Args... args) -> R { ///!!!!!!!!!!!!!! Args&&... args
           return cast<T>(src)->operator()(std::forward<Args>(args)...);
@@ -125,21 +165,22 @@ struct function<R(Args...)> {
     function() noexcept
         : desc(type_descriptor<R, Args...>::get_empty_func_descriptor()) {}
 
+    function(function const& other) : desc(other.desc) {
+      other.desc->copy(other.storage, this->storage);
+    }
+
     function(function && other) : desc(other.desc) {
       other.desc = type_descriptor<R, Args...>::get_empty_func_descriptor();
       desc->move(other.storage, this->storage);
     }
 
-  function(function const& other) : desc(other.desc) {
-    other.desc->copy(other.storage, this->storage);
-  }
-
   template <typename T>
   function(T val)
       : desc(type_descriptor<R, Args...>::template get_descriptor<T>()) {
 
-    if constexpr (sizeof(T) < sizeof(storage_t) &&
-                  alignof(storage_t) % alignof(T) == 0) { ///!!!!!!!!!!!!!! if constexpr (fits_small<T>)
+    //if constexpr (sizeof(T) < sizeof(storage_t) &&
+       //           alignof(storage_t) % alignof(T) == 0) { ///!!!!!!!!!!!!!! if constexpr (fits_small<T>)
+    if constexpr (fits_small<T>){
       new (&storage) T(std::move(val));
     } else {
       auto ptr = new T(std::move(val));
@@ -148,11 +189,20 @@ struct function<R(Args...)> {
   }
 
     function& operator=(function const& other) {
-      if (this != &other) {
-        desc->destroy(storage);
-        desc = other.desc;
-        other.desc->copy(other.storage, this->storage);
-        ///function(other).swap(*this); /// wrong
+     if (this != &other) {
+
+       storage_t buf;
+       other.desc->copy(other.storage, buf);
+       this->desc->destroy(this->storage);
+       desc = other.desc;
+       storage = buf;
+
+
+//        this->desc->destroy(this->storage);
+//        desc = type_descriptor<R, Args...>::get_empty_func_descriptor();
+//        other.desc->copy(other.storage, this->storage);
+//        this->desc = other.desc;
+        //function(other).swap(*this); /// wrong
       }
       return *this;
     }
@@ -164,17 +214,17 @@ struct function<R(Args...)> {
         desc = other.desc;
         other.desc = type_descriptor<R, Args...>::get_empty_func_descriptor();
         desc->move(other.storage, this->storage);
-        ///function(other).swap(*this); /// wrong
+        //function(std::move(other)).swap(*this); /// wrong
       }
       return *this;
     }
 
 
-//    void swap(function& other) {
-//      using std::swap;
-//      swap(storage, other.storage); /// wrong?
-//      swap(desc, other.desc);
-//    }
+    void swap(function& other) {
+      using std::swap;
+      swap(storage, other.storage); /// wrong?
+      swap(desc, other.desc);
+    }
 
 
 
