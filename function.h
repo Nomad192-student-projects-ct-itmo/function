@@ -7,71 +7,71 @@ struct bad_function_call : std::exception {
   }
 };
 
+namespace details {
 using storage_t = std::aligned_storage_t<sizeof(void*), alignof(void*)>;
 
-namespace details
-{
-  template <typename T>
-  constexpr inline bool fits_small =
-      sizeof(T) < sizeof(storage_t) && alignof(storage_t) % alignof(T) == 0 &&
-      std::is_nothrow_move_assignable_v<T> &&
-      std::is_nothrow_move_constructible_v<T>;
+template <typename T>
+constexpr inline bool fits_small =
+    sizeof(T) < sizeof(storage_t) && alignof(storage_t) % alignof(T) == 0 &&
+    std::is_nothrow_move_assignable_v<T> &&
+    std::is_nothrow_move_constructible_v<T>;
 
-  template <typename T>
-  T* small_cast(storage_t& storage) {
-    return reinterpret_cast<T*>(&storage);
-  }
+template <typename T>
+T* small_cast(storage_t& storage) {
+  return reinterpret_cast<T*>(&storage);
+}
 
-  template <typename T>
-  T const* small_cast(storage_t const& storage) {
-    return reinterpret_cast<T const*>(&storage);
-  }
+template <typename T>
+T const* small_cast(storage_t const& storage) {
+  return reinterpret_cast<T const*>(&storage);
+}
 
-  template <typename T>
-  T* big_cast(storage_t& storage) {
-    return *reinterpret_cast<T**>(&storage);
-  }
+template <typename T>
+T* big_cast(storage_t& storage) {
+  return *reinterpret_cast<T**>(&storage);
+}
 
-  template <typename T>
-  T* big_cast(storage_t const& storage) {
-    return *reinterpret_cast<T* const*>(&storage);
-  }
+template <typename T>
+T* big_cast(storage_t const& storage) {
+  return *reinterpret_cast<T* const*>(&storage);
+}
 
-  template <typename T>
-  T* cast(storage_t& storage) {
-    if constexpr (fits_small<T>) {
-      return small_cast<T>(storage);
-    } else {
-      return big_cast<T>(storage);
-    }
-  }
-
-  template <typename T>
-  T const* cast(storage_t const& storage) {
-    if constexpr (fits_small<T>) {
-      return small_cast<T>(storage);
-    } else {
-      return big_cast<T>(storage);
-    }
+template <typename T>
+T* cast(storage_t& storage) {
+  if constexpr (fits_small<T>) {
+    return small_cast<T>(storage);
+  } else {
+    return big_cast<T>(storage);
   }
 }
 
+template <typename T>
+T const* cast(storage_t const& storage) {
+  if constexpr (fits_small<T>) {
+    return small_cast<T>(storage);
+  } else {
+    return big_cast<T>(storage);
+  }
+}
+} // namespace details
 
 template <typename R, typename... Args>
 struct type_descriptor {
 
-  void (*copy)(storage_t const& src, storage_t& dst);
-  void (*move)(storage_t& src, storage_t& dst);
-  void (*destroy)(storage_t& src);
-  R (*invoke)(storage_t const& src, Args&&... args);
+  void (*copy)(details::storage_t const& src, details::storage_t& dst);
+  void (*move)(details::storage_t& src, details::storage_t& dst);
+  void (*destroy)(details::storage_t& src);
+  R (*invoke)(details::storage_t const& src, Args&&... args);
 
   static type_descriptor<R, Args...> const*
   get_empty_func_descriptor() noexcept {
     constexpr static type_descriptor<R, Args...> result = {
-        [](storage_t const&, storage_t&) { },
-        [](storage_t&, storage_t&) { },
-        [](storage_t&) {},
-        [](storage_t const&, Args&&...) -> R { throw bad_function_call{}; }};
+        [](details::storage_t const&, details::storage_t&) {},
+        [](details::storage_t&, details::storage_t&) {},
+        [](details::storage_t&) {},
+        [](details::storage_t const&, Args&&...) -> R {
+          throw bad_function_call{};
+        }};
 
     return &result;
   }
@@ -79,7 +79,7 @@ struct type_descriptor {
   template <typename T>
   static type_descriptor<R, Args...> const* get_descriptor() noexcept {
     constexpr static type_descriptor<R, Args...> result = {
-        [](storage_t const& src, storage_t& dst) {
+        [](details::storage_t const& src, details::storage_t& dst) {
           if constexpr (details::fits_small<T>) {
             new (&dst) T(*details::small_cast<T>(src));
           } else {
@@ -87,7 +87,7 @@ struct type_descriptor {
             new (&dst) T*(ptr);
           }
         },
-        [](storage_t& src, storage_t& dst) {
+        [](details::storage_t& src, details::storage_t& dst) {
           if constexpr (details::fits_small<T>) {
             new (&dst) T(std::move(*details::small_cast<T>(src)));
             details::small_cast<T>(src)->~T();
@@ -95,14 +95,14 @@ struct type_descriptor {
             new (&dst) T*(details::big_cast<T>(src));
           }
         },
-        [](storage_t& src) {
+        [](details::storage_t& src) {
           if constexpr (details::fits_small<T>) {
             details::small_cast<T>(src)->~T();
           } else {
             delete details::big_cast<T>(src);
           }
         },
-        [](storage_t const& src, Args&&... args) -> R {
+        [](details::storage_t const& src, Args&&... args) -> R {
           return details::cast<T>(src)->operator()(std::forward<Args>(args)...);
         }};
 
@@ -140,7 +140,7 @@ struct function<R(Args...)> {
 
   function& operator=(function const& other) {
     if (this != &other) {
-      storage_t buf;
+      details::storage_t buf;
       other.desc->copy(other.storage, buf);
       this->desc->destroy(this->storage);
       desc = other.desc;
@@ -190,6 +190,6 @@ struct function<R(Args...)> {
   }
 
 private:
-  storage_t storage;
+  details::storage_t storage;
   type_descriptor<R, Args...> const* desc;
 };
